@@ -196,11 +196,12 @@ impl<'cfg> Workspace<'cfg> {
     /// actually a "virtual Cargo.toml", in which case an error is returned
     /// indicating that something else should be passed.
     pub fn current(&self) -> CargoResult<&Package> {
-        self.current_opt().ok_or_else(||
-            format!("manifest path `{}` is a virtual manifest, but this \
-                     command requires running against an actual package in \
-                     this workspace", self.current_manifest.display()).into()
-        )
+        let pkg = self.current_opt().ok_or_else(|| {
+            format_err!("manifest path `{}` is a virtual manifest, but this \
+                         command requires running against an actual package in \
+                         this workspace", self.current_manifest.display())
+        })?;
+        Ok(pkg)
     }
 
     pub fn current_opt(&self) -> Option<&Package> {
@@ -333,9 +334,6 @@ impl<'cfg> Workspace<'cfg> {
         }
 
         for path in paths::ancestors(manifest_path).skip(2) {
-            if self.config.home() == path {
-                return Ok(None);
-            }
             let ances_manifest_path = path.join("Cargo.toml");
             debug!("find_root - trying {}", ances_manifest_path.display());
             if ances_manifest_path.exists() {
@@ -353,6 +351,15 @@ impl<'cfg> Workspace<'cfg> {
                     }
                     WorkspaceConfig::Member { .. } => {}
                 }
+            }
+
+            // Don't walk across `CARGO_HOME` when we're looking for the
+            // workspace root. Sometimes a project will be organized with
+            // `CARGO_HOME` pointing inside of the workspace root or in the
+            // current project, but we don't want to mistakenly try to put
+            // crates.io crates into the workspace by accident.
+            if self.config.home() == path {
+                break
             }
         }
 
@@ -747,12 +754,13 @@ impl WorkspaceRootConfig {
             None => return Ok(Vec::new()),
         };
         let res = glob(path).chain_err(|| {
-            format!("could not parse pattern `{}`", &path)
+            format_err!("could not parse pattern `{}`", &path)
         })?;
-        res.map(|p| {
+        let res = res.map(|p| {
             p.chain_err(|| {
-                format!("unable to match path to pattern `{}`", &path)
+                format_err!("unable to match path to pattern `{}`", &path)
             })
-        }).collect()
+        }).collect::<Result<Vec<_>, _>>()?;
+        Ok(res)
     }
 }

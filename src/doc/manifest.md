@@ -192,7 +192,7 @@ license-file = "..."
 
 # Appveyor: `repository` is required. `branch` is optional; default is `master`
 # `service` is optional; valid values are `github` (default), `bitbucket`, and
-# `gitlab`; `id` is optional; you can specify the appveyor project id if you 
+# `gitlab`; `id` is optional; you can specify the appveyor project id if you
 # want to use that instead. `project_name` is optional; use when the repository
 # name differs from the appveyor project name.
 appveyor = { repository = "...", branch = "master", service = "github" }
@@ -289,6 +289,7 @@ codegen-units = 1  # if > 1 enables parallel code generation which improves
                    # compile times, but prevents some optimizations.
                    # Passes `-C codegen-units`. Ignored when `lto = true`.
 panic = 'unwind'   # panic strategy (`-C panic=...`), can also be 'abort'
+incremental = true # whether or not incremental compilation is enabled
 
 # The release profile, used for `cargo build --release`.
 [profile.release]
@@ -299,6 +300,7 @@ lto = false
 debug-assertions = false
 codegen-units = 1
 panic = 'unwind'
+incremental = false
 
 # The testing profile, used for `cargo test`.
 [profile.test]
@@ -309,6 +311,7 @@ lto = false
 debug-assertions = true
 codegen-units = 1
 panic = 'unwind'
+incremental = true
 
 # The benchmarking profile, used for `cargo bench` and `cargo test --release`.
 [profile.bench]
@@ -319,6 +322,7 @@ lto = false
 debug-assertions = false
 codegen-units = 1
 panic = 'unwind'
+incremental = false
 
 # The documentation profile, used for `cargo doc`.
 [profile.doc]
@@ -329,6 +333,7 @@ lto = false
 debug-assertions = true
 codegen-units = 1
 panic = 'unwind'
+incremental = true
 ```
 
 # The `[features]` section
@@ -519,20 +524,23 @@ crate will be treated as a normal package, as well as a workspace. If the
 `package` table is not present in a workspace manifest, it is called a *virtual
 manifest*.
 
-When working with *virtual manifests*, package-related cargo commands, like
-`cargo build`, default to the set of packages specified by the `default-members`
-configuration:
+## Package selection
+
+In a workspace, package-related cargo commands like `cargo build` apply to
+packages selected by `-p` / `--package` or `--all` command-line parameters.
+When neither is specified, the optional `default-members` configuration is used:
 
 ```toml
 [workspace]
 members = ["path/to/member1", "path/to/member2", "path/to/member3/*"]
-
-# The members that commands like `cargo build` apply to by deault.
-# This must expand to a subset of `members`.
-# Optional key, defaults to the same as `members`
-# (as if `--all` were used on the command line).
-default-members = ["path/to/member2", "path/to/member3/*"]
+default-members = ["path/to/member2", "path/to/member3/foo"]
 ```
+
+When specified, `default-members` must expand to a subset of `members`.
+
+When `default-members` is not specified, the default is the root manifest
+if it is a package, or every member manifest (as if `--all` were specified
+on the command-line) for virtual workspaces.
 
 # The project layout
 

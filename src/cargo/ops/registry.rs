@@ -19,7 +19,7 @@ use sources::{RegistrySource};
 use util::config::{self, Config};
 use util::paths;
 use util::ToUrl;
-use util::errors::{CargoError, CargoResult, CargoResultExt};
+use util::errors::{CargoResult, CargoResultExt};
 use util::important_paths::find_root_manifest_for_wd;
 
 pub struct RegistryConfig {
@@ -277,6 +277,15 @@ pub fn http_handle(config: &Config) -> CargoResult<Easy> {
     Ok(handle)
 }
 
+pub fn needs_custom_http_transport(config: &Config) -> CargoResult<bool> {
+    let proxy_exists = http_proxy_exists(config)?;
+    let timeout = http_timeout(config)?;
+    let cainfo = config.get_path("http.cainfo")?;
+    let check_revoke = config.get_bool("http.check-revoke")?;
+
+    Ok(proxy_exists || timeout.is_some() || cainfo.is_some() || check_revoke.is_some())
+}
+
 /// Configure a libcurl http handle with the defaults options for Cargo
 pub fn configure_http_handle(config: &Config, handle: &mut Easy) -> CargoResult<()> {
     // The timeout option for libcurl by default times out the entire transfer,
@@ -329,7 +338,7 @@ fn http_proxy(config: &Config) -> CargoResult<Option<String>> {
 /// * `HTTP_PROXY` env var
 /// * `https_proxy` env var
 /// * `HTTPS_PROXY` env var
-pub fn http_proxy_exists(config: &Config) -> CargoResult<bool> {
+fn http_proxy_exists(config: &Config) -> CargoResult<bool> {
     if http_proxy(config)?.is_some() {
         Ok(true)
     } else {
@@ -338,7 +347,7 @@ pub fn http_proxy_exists(config: &Config) -> CargoResult<bool> {
     }
 }
 
-pub fn http_timeout(config: &Config) -> CargoResult<Option<i64>> {
+fn http_timeout(config: &Config) -> CargoResult<Option<i64>> {
     if let Some(s) = config.get_i64("http.timeout")? {
         return Ok(Some(s.val))
     }
@@ -390,7 +399,7 @@ pub fn modify_owners(config: &Config, opts: &OwnersOptions) -> CargoResult<()> {
     if let Some(ref v) = opts.to_add {
         let v = v.iter().map(|s| &s[..]).collect::<Vec<_>>();
         let msg = registry.add_owners(&name, &v).map_err(|e| {
-            CargoError::from(format!("failed to invite owners to crate {}: {}", name, e))
+            format_err!("failed to invite owners to crate {}: {}", name, e)
         })?;
 
         config.shell().status("Owner", msg)?;
@@ -400,14 +409,14 @@ pub fn modify_owners(config: &Config, opts: &OwnersOptions) -> CargoResult<()> {
         let v = v.iter().map(|s| &s[..]).collect::<Vec<_>>();
         config.shell().status("Owner", format!("removing {:?} from crate {}",
                                                     v, name))?;
-        registry.remove_owners(&name, &v).map_err(|e| {
-            CargoError::from(format!("failed to remove owners from crate {}: {}", name, e))
+        registry.remove_owners(&name, &v).chain_err(|| {
+            format!("failed to remove owners from crate {}", name)
         })?;
     }
 
     if opts.list {
-        let owners = registry.list_owners(&name).map_err(|e| {
-            CargoError::from(format!("failed to list owners of crate {}: {}", name, e))
+        let owners = registry.list_owners(&name).chain_err(|| {
+            format!("failed to list owners of crate {}", name)
         })?;
         for owner in owners.iter() {
             print!("{}", owner.login);
@@ -447,13 +456,13 @@ pub fn yank(config: &Config,
 
     if undo {
         config.shell().status("Unyank", format!("{}:{}", name, version))?;
-        registry.unyank(&name, &version).map_err(|e| {
-            CargoError::from(format!("failed to undo a yank: {}", e))
+        registry.unyank(&name, &version).chain_err(|| {
+            "failed to undo a yank"
         })?;
     } else {
         config.shell().status("Yank", format!("{}:{}", name, version))?;
-        registry.yank(&name, &version).map_err(|e| {
-            CargoError::from(format!("failed to yank: {}", e))
+        registry.yank(&name, &version).chain_err(|| {
+            "failed to yank"
         })?;
     }
 
@@ -478,8 +487,8 @@ pub fn search(query: &str,
     }
 
     let (mut registry, _) = registry(config, None, index, reg)?;
-    let (crates, total_crates) = registry.search(query, limit).map_err(|e| {
-        CargoError::from(format!("failed to retrieve search results from the registry: {}", e))
+    let (crates, total_crates) = registry.search(query, limit).chain_err(|| {
+        "failed to retrieve search results from the registry"
     })?;
 
     let names = crates.iter()
