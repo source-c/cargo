@@ -6,7 +6,7 @@ describes the high-level structure of Cargo and [E-easy] bugs on the
 issue tracker.
 
 If you have a general question about Cargo or it's internals, feel free to ask
-on [IRC].
+on [Discord].
 
 ## Code of Conduct
 
@@ -22,10 +22,9 @@ and unexpected behavior.
 its users' security, please do not open a public issue on GitHub. Instead,
 we ask you to refer to Rust's [security policy].**
 
-Opening an issue is as easy as following [this
-link][new-issues] and filling out the fields.
-Here's a template that you can use to file an issue, though it's not necessary to
-use it exactly:
+Opening an issue is as easy as following [this link][new-issues] and filling out
+the fields. Here's a template that you can use to file an issue, though it's not
+necessary to use it exactly:
 
     <short summary of the problem>
 
@@ -40,11 +39,22 @@ use it exactly:
 All three components are important: what you did, what you expected, what
 happened instead. Please use https://gist.github.com/ if your examples run long.
 
+
+## Feature requests
+
+Cargo follows the general Rust model of evolution. All major features go through
+an RFC process. Therefore, before opening a feature request issue create a
+Pre-RFC thread on the [internals][irlo] forum to get preliminary feedback.
+Implementing a feature as a [custom subcommand][subcommands] is encouraged as it
+helps demonstrate the demand for the functionality and is a great way to deliver
+a working solution faster as it can iterate outside of cargo's release cadence.
+
 ## Working on issues
 
-If you're looking for somewhere to start, check out the [E-easy][E-Easy] tag.
+If you're looking for somewhere to start, check out the [E-easy][E-Easy] and
+[E-mentor][E-mentor] tags.
 
-Feel free to ask for guidelines on how to tackle a problem on [IRC] or open a
+Feel free to ask for guidelines on how to tackle a problem on [Discord] or open a
 [new issue][new-issues]. This is especially important if you want to add new
 features to Cargo or make large changes to the already existing code-base.
 Cargo's core developers will do their best to provide help.
@@ -75,12 +85,19 @@ working on.
 * [Commit as you go][githelp].
 * Include tests that cover all non-trivial code. The existing tests
 in `test/` provide templates on how to test Cargo's behavior in a
-sandbox-environment. The internal crate `cargotest` provides a vast amount
-of helpers to minimize boilerplate.
+sandbox-environment. The internal module `testsuite/support` provides a vast amount
+of helpers to minimize boilerplate. See [`testsuite/support/mod.rs`] for an
+introduction to writing tests.
 * Make sure `cargo test` passes. If you do not have the cross-compilers
-installed locally, ignore the cross-compile test failures or disable them by
+installed locally, install them using the instructions returned by
+`cargo test cross_compile::cross_tests` (twice, with `--toolchain nightly`
+added to get the nightly cross target too); alternatively just
+ignore the cross-compile test failures or disable them by
 using `CFG_DISABLE_CROSS_TESTS=1 cargo test`. Note that some tests are enabled
 only on `nightly` toolchain. If you can, test both toolchains.
+* All code changes are expected to comply with the formatting suggested by `rustfmt`.
+You can use `rustup component add --toolchain nightly rustfmt` to install `rustfmt` and use
+`rustfmt +nightly --unstable-features --skip-children` on the changed files to automatically format your code.
 * Push your commits to GitHub and create a pull request against Cargo's
 `master` branch.
 
@@ -89,11 +106,11 @@ only on `nightly` toolchain. If you can, test both toolchains.
 After the pull request is made, a friendly bot will automatically assign a
 reviewer; the review-process will make sure that the proposed changes are
 sound. Please give the assigned reviewer sufficient time, especially during
-weekends. If you don't get a reply, you may poke the core developers on [IRC].
+weekends. If you don't get a reply, you may poke the core developers on [Discord].
 
 A merge of Cargo's master-branch and your changes is immediately queued
 to be tested after the pull request is made. In case unforeseen
-problems are discovered during this step (e.g. a failure on a platform you
+problems are discovered during this step (e.g., a failure on a platform you
 originally did not develop on), you may ask for guidance. Push additional
 commits to your branch to tackle these problems.
 
@@ -109,12 +126,15 @@ and [merges][mergequeue] it into Cargo's `master` branch.
 
 To contribute to the documentation, all you need to do is change the markdown
 files in the `src/doc` directory. To view the rendered version of changes you
-have made locally, run:
+have made locally, make sure you have `mdbook` installed and run:
 
 ```sh
-sh src/ci/dox.sh
-open target/doc/index.html
+cd src/doc
+mdbook build
+open book/index.html
 ```
+
+To install `mdbook` run `cargo install mdbook`.
 
 
 ## Issue Triage
@@ -137,6 +157,11 @@ adding labels to triage issues:
 * Magenta, **B**-prefixed labels identify bugs which are **blockers**.
 
 * Light purple, **C**-prefixed labels represent the **category** of an issue.
+  In particular, **C-feature-request** marks *proposals* for new features. If
+  an issue is **C-feature-request**, but is not **Feature accepted** or **I-nominated**,
+  then it was not thoroughly discussed, and might need some additional design
+  or perhaps should be implemented as an external subcommand first. Ping
+  @rust-lang/cargo if you want to send a PR for such issue.
 
 * Dark purple, **Command**-prefixed labels mean the issue has to do with a
   specific cargo command.
@@ -146,14 +171,14 @@ adding labels to triage issues:
   have some instructions on how to get started.
 
 * Red, **I**-prefixed labels indicate the **importance** of the issue. The
-  [I-nominated][inom] label indicates that an issue has been nominated for
+  **[I-nominated][]** label indicates that an issue has been nominated for
   prioritizing at the next triage meeting.
 
 * Purple gray, **O**-prefixed labels are the **operating system** or platform
   that this issue is specific to.
 
 * Orange, **P**-prefixed labels indicate a bug's **priority**. These labels
-  are only assigned during triage meetings and replace the [I-nominated][inom]
+  are only assigned during triage meetings and replace the **[I-nominated][]**
   label.
 
 * The light orange **relnotes** label marks issues that should be documented in
@@ -169,5 +194,9 @@ adding labels to triage issues:
 [lru]: https://github.com/rust-lang/cargo/issues?q=is%3Aissue+is%3Aopen+sort%3Aupdated-asc
 [E-easy]: https://github.com/rust-lang/cargo/labels/E-easy
 [E-mentor]: https://github.com/rust-lang/cargo/labels/E-mentor
+[I-nominated]: https://github.com/rust-lang/cargo/labels/I-nominated
 [Code of Conduct]: https://www.rust-lang.org/conduct.html
-[IRC]: https://kiwiirc.com/client/irc.mozilla.org/cargo
+[Discord]: https://discordapp.com/invite/rust-lang
+[`testsuite/support/mod.rs`]: https://github.com/rust-lang/cargo/blob/master/tests/testsuite/support/mod.rs
+[irlo]: https://internals.rust-lang.org/
+[subcommands]: https://doc.rust-lang.org/cargo/reference/external-tools.html#custom-subcommands

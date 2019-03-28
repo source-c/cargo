@@ -1,9 +1,10 @@
+use std::cell::RefCell;
 use std::env;
 use std::fmt;
+use std::io::{stdout, StdoutLock, Write};
+use std::iter::repeat;
 use std::mem;
 use std::time;
-use std::iter::repeat;
-use std::cell::RefCell;
 
 thread_local!(static PROFILE_STACK: RefCell<Vec<time::Instant>> = RefCell::new(Vec::new()));
 thread_local!(static MESSAGES: RefCell<Vec<Message>> = RefCell::new(Vec::new()));
@@ -19,7 +20,11 @@ fn enabled_level() -> Option<usize> {
 }
 
 pub fn start<T: fmt::Display>(desc: T) -> Profiler {
-    if enabled_level().is_none() { return Profiler { desc: String::new() } }
+    if enabled_level().is_none() {
+        return Profiler {
+            desc: String::new(),
+        };
+    }
 
     PROFILE_STACK.with(|stack| stack.borrow_mut().push(time::Instant::now()));
 
@@ -35,36 +40,49 @@ impl Drop for Profiler {
             None => return,
         };
 
-        let start = PROFILE_STACK.with(|stack| stack.borrow_mut().pop().unwrap());
+        let (start, stack_len) = PROFILE_STACK.with(|stack| {
+            let mut stack = stack.borrow_mut();
+            let start = stack.pop().unwrap();
+            (start, stack.len())
+        });
         let duration = start.elapsed();
-        let duration_ms = duration.as_secs() * 1000 + u64::from(duration.subsec_nanos() / 1_000_000);
+        let duration_ms = duration.as_secs() * 1000 + u64::from(duration.subsec_millis());
 
-        let stack_len = PROFILE_STACK.with(|stack| stack.borrow().len());
+        let msg = (
+            stack_len,
+            duration_ms,
+            mem::replace(&mut self.desc, String::new()),
+        );
+        MESSAGES.with(|msgs| msgs.borrow_mut().push(msg));
+
         if stack_len == 0 {
-            fn print(lvl: usize, msgs: &[Message], enabled: usize) {
-                if lvl > enabled { return }
+            fn print(lvl: usize, msgs: &[Message], enabled: usize, stdout: &mut StdoutLock<'_>) {
+                if lvl > enabled {
+                    return;
+                }
                 let mut last = 0;
                 for (i, &(l, time, ref msg)) in msgs.iter().enumerate() {
-                    if l != lvl { continue }
-                    println!("{} {:6}ms - {}",
-                             repeat("    ").take(lvl + 1).collect::<String>(),
-                             time, msg);
+                    if l != lvl {
+                        continue;
+                    }
+                    writeln!(
+                        stdout,
+                        "{} {:6}ms - {}",
+                        repeat("    ").take(lvl + 1).collect::<String>(),
+                        time,
+                        msg
+                    )
+                    .expect("printing profiling info to stdout");
 
-                    print(lvl + 1, &msgs[last..i], enabled);
+                    print(lvl + 1, &msgs[last..i], enabled, stdout);
                     last = i;
                 }
-
             }
-            MESSAGES.with(|msgs_rc| {
-                let mut msgs = msgs_rc.borrow_mut();
-                msgs.push((0, duration_ms,
-                           mem::replace(&mut self.desc, String::new())));
-                print(0, &msgs, enabled);
-            });
-        } else {
+            let stdout = stdout();
             MESSAGES.with(|msgs| {
-                let msg = mem::replace(&mut self.desc, String::new());
-                msgs.borrow_mut().push((stack_len, duration_ms, msg));
+                let mut msgs = msgs.borrow_mut();
+                print(0, &msgs, enabled, &mut stdout.lock());
+                msgs.clear();
             });
         }
     }

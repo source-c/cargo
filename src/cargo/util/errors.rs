@@ -1,31 +1,40 @@
 #![allow(unknown_lints)]
 
 use std::fmt;
-use std::process::{Output, ExitStatus};
+use std::path::PathBuf;
+use std::process::{ExitStatus, Output};
 use std::str;
 
-use core::TargetKind;
+use clap;
 use failure::{Context, Error, Fail};
+use log::trace;
 
-pub use failure::Error as CargoError;
-pub type CargoResult<T> = Result<T, Error>;
+use crate::core::{TargetKind, Workspace};
+
+pub type CargoResult<T> = failure::Fallible<T>; // Alex's body isn't quite ready to give up "Result"
 
 pub trait CargoResultExt<T, E> {
     fn chain_err<F, D>(self, f: F) -> Result<T, Context<D>>
-        where F: FnOnce() -> D,
-              D: fmt::Display + Send + Sync + 'static;
+    where
+        F: FnOnce() -> D,
+        D: fmt::Display + Send + Sync + 'static;
 }
 
 impl<T, E> CargoResultExt<T, E> for Result<T, E>
-	where E: Into<Error>,
+where
+    E: Into<Error>,
 {
     fn chain_err<F, D>(self, f: F) -> Result<T, Context<D>>
-        where F: FnOnce() -> D,
-              D: fmt::Display + Send + Sync + 'static,
+    where
+        F: FnOnce() -> D,
+        D: fmt::Display + Send + Sync + 'static,
     {
         self.map_err(|failure| {
+            let err = failure.into();
             let context = f();
-            failure.into().context(context)
+            trace!("error: {}", err);
+            trace!("\tcontext: {}", context);
+            err.context(context)
         })
     }
 }
@@ -48,22 +57,84 @@ impl Internal {
 }
 
 impl Fail for Internal {
-    fn cause(&self) -> Option<&Fail> {
-        self.inner.cause().cause()
+    fn cause(&self) -> Option<&dyn Fail> {
+        self.inner.as_fail().cause()
     }
 }
 
 impl fmt::Debug for Internal {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         self.inner.fmt(f)
     }
 }
 
 impl fmt::Display for Internal {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         self.inner.fmt(f)
     }
 }
+
+/// Error wrapper related to a particular manifest and providing it's path.
+///
+/// This error adds no displayable info of it's own.
+pub struct ManifestError {
+    cause: Error,
+    manifest: PathBuf,
+}
+
+impl ManifestError {
+    pub fn new<E: Into<Error>>(cause: E, manifest: PathBuf) -> Self {
+        Self {
+            cause: cause.into(),
+            manifest,
+        }
+    }
+
+    pub fn manifest_path(&self) -> &PathBuf {
+        &self.manifest
+    }
+
+    /// Returns an iterator over the `ManifestError` chain of causes.
+    ///
+    /// So if this error was not caused by another `ManifestError` this will be empty.
+    pub fn manifest_causes(&self) -> ManifestCauses<'_> {
+        ManifestCauses { current: self }
+    }
+}
+
+impl Fail for ManifestError {
+    fn cause(&self) -> Option<&dyn Fail> {
+        self.cause.as_fail().cause()
+    }
+}
+
+impl fmt::Debug for ManifestError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.cause.fmt(f)
+    }
+}
+
+impl fmt::Display for ManifestError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.cause.fmt(f)
+    }
+}
+
+/// An iterator over the `ManifestError` chain of causes.
+pub struct ManifestCauses<'a> {
+    current: &'a ManifestError,
+}
+
+impl<'a> Iterator for ManifestCauses<'a> {
+    type Item = &'a ManifestError;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.current = self.current.cause.downcast_ref()?;
+        Some(self.current)
+    }
+}
+
+impl<'a> ::std::iter::FusedIterator for ManifestCauses<'a> {}
 
 // =============================================================================
 // Process errors
@@ -92,7 +163,11 @@ pub struct CargoTestError {
 pub enum Test {
     Multiple,
     Doc,
-    UnitTest(TargetKind, String)
+    UnitTest {
+        kind: TargetKind,
+        name: String,
+        pkg_name: String,
+    },
 }
 
 impl CargoTestError {
@@ -100,32 +175,51 @@ impl CargoTestError {
         if errors.is_empty() {
             panic!("Cannot create CargoTestError from empty Vec")
         }
-        let desc = errors.iter().map(|error| error.desc.clone())
-                                .collect::<Vec<String>>()
-                                .join("\n");
+        let desc = errors
+            .iter()
+            .map(|error| error.desc.clone())
+            .collect::<Vec<String>>()
+            .join("\n");
         CargoTestError {
-            test: test,
-            desc: desc,
+            test,
+            desc,
             exit: errors[0].exit,
             causes: errors,
         }
     }
 
-    pub fn hint(&self) -> String {
+    pub fn hint(&self, ws: &Workspace<'_>) -> String {
         match self.test {
-            Test::UnitTest(ref kind, ref name) => {
+            Test::UnitTest {
+                ref kind,
+                ref name,
+                ref pkg_name,
+            } => {
+                let pkg_info = if ws.members().count() > 1 && ws.is_virtual() {
+                    format!("-p {} ", pkg_name)
+                } else {
+                    String::new()
+                };
+
                 match *kind {
-                    TargetKind::Bench => format!("test failed, to rerun pass '--bench {}'", name),
-                    TargetKind::Bin => format!("test failed, to rerun pass '--bin {}'", name),
-                    TargetKind::Lib(_) => "test failed, to rerun pass '--lib'".into(),
-                    TargetKind::Test => format!("test failed, to rerun pass '--test {}'", name),
-                    TargetKind::ExampleBin | TargetKind::ExampleLib(_) =>
-                        format!("test failed, to rerun pass '--example {}", name),
-                    _ => "test failed.".into()
+                    TargetKind::Bench => {
+                        format!("test failed, to rerun pass '{}--bench {}'", pkg_info, name)
+                    }
+                    TargetKind::Bin => {
+                        format!("test failed, to rerun pass '{}--bin {}'", pkg_info, name)
+                    }
+                    TargetKind::Lib(_) => format!("test failed, to rerun pass '{}--lib'", pkg_info),
+                    TargetKind::Test => {
+                        format!("test failed, to rerun pass '{}--test {}'", pkg_info, name)
+                    }
+                    TargetKind::ExampleBin | TargetKind::ExampleLib(_) => {
+                        format!("test failed, to rerun pass '{}--example {}", pkg_info, name)
+                    }
+                    _ => "test failed.".into(),
                 }
-            },
+            }
             Test::Doc => "test failed, to rerun pass '--doc'".into(),
-            _ => "test failed.".into()
+            _ => "test failed.".into(),
         }
     }
 }
@@ -137,36 +231,51 @@ pub type CliResult = Result<(), CliError>;
 
 #[derive(Debug)]
 pub struct CliError {
-    pub error: Option<CargoError>,
+    pub error: Option<failure::Error>,
     pub unknown: bool,
-    pub exit_code: i32
+    pub exit_code: i32,
 }
 
 impl CliError {
-    pub fn new(error: CargoError, code: i32) -> CliError {
+    pub fn new(error: failure::Error, code: i32) -> CliError {
         let unknown = error.downcast_ref::<Internal>().is_some();
-        CliError { error: Some(error), exit_code: code, unknown }
+        CliError {
+            error: Some(error),
+            exit_code: code,
+            unknown,
+        }
     }
 
     pub fn code(code: i32) -> CliError {
-        CliError { error: None, exit_code: code, unknown: false }
+        CliError {
+            error: None,
+            exit_code: code,
+            unknown: false,
+        }
     }
 }
 
-impl From<CargoError> for CliError {
-    fn from(err: CargoError) -> CliError {
+impl From<failure::Error> for CliError {
+    fn from(err: failure::Error) -> CliError {
         CliError::new(err, 101)
     }
 }
 
+impl From<clap::Error> for CliError {
+    fn from(err: clap::Error) -> CliError {
+        let code = if err.use_stderr() { 1 } else { 0 };
+        CliError::new(err.into(), code)
+    }
+}
 
 // =============================================================================
 // Construction helpers
 
-pub fn process_error(msg: &str,
-                     status: Option<&ExitStatus>,
-                     output: Option<&Output>) -> ProcessError
-{
+pub fn process_error(
+    msg: &str,
+    status: Option<ExitStatus>,
+    output: Option<&Output>,
+) -> ProcessError {
     let exit = match status {
         Some(s) => status_to_string(s),
         None => "never executed".to_string(),
@@ -191,15 +300,14 @@ pub fn process_error(msg: &str,
     }
 
     return ProcessError {
-        desc: desc,
-        exit: status.cloned(),
+        desc,
+        exit: status,
         output: output.cloned(),
     };
 
     #[cfg(unix)]
-    fn status_to_string(status: &ExitStatus) -> String {
+    fn status_to_string(status: ExitStatus) -> String {
         use std::os::unix::process::*;
-        use libc;
 
         if let Some(signal) = status.signal() {
             let name = match signal as libc::c_int {
@@ -227,15 +335,55 @@ pub fn process_error(msg: &str,
     }
 
     #[cfg(windows)]
-    fn status_to_string(status: &ExitStatus) -> String {
-        status.to_string()
+    fn status_to_string(status: ExitStatus) -> String {
+        use winapi::shared::minwindef::DWORD;
+        use winapi::um::winnt::*;
+
+        let mut base = status.to_string();
+        let extra = match status.code().unwrap() as DWORD {
+            STATUS_ACCESS_VIOLATION => "STATUS_ACCESS_VIOLATION",
+            STATUS_IN_PAGE_ERROR => "STATUS_IN_PAGE_ERROR",
+            STATUS_INVALID_HANDLE => "STATUS_INVALID_HANDLE",
+            STATUS_INVALID_PARAMETER => "STATUS_INVALID_PARAMETER",
+            STATUS_NO_MEMORY => "STATUS_NO_MEMORY",
+            STATUS_ILLEGAL_INSTRUCTION => "STATUS_ILLEGAL_INSTRUCTION",
+            STATUS_NONCONTINUABLE_EXCEPTION => "STATUS_NONCONTINUABLE_EXCEPTION",
+            STATUS_INVALID_DISPOSITION => "STATUS_INVALID_DISPOSITION",
+            STATUS_ARRAY_BOUNDS_EXCEEDED => "STATUS_ARRAY_BOUNDS_EXCEEDED",
+            STATUS_FLOAT_DENORMAL_OPERAND => "STATUS_FLOAT_DENORMAL_OPERAND",
+            STATUS_FLOAT_DIVIDE_BY_ZERO => "STATUS_FLOAT_DIVIDE_BY_ZERO",
+            STATUS_FLOAT_INEXACT_RESULT => "STATUS_FLOAT_INEXACT_RESULT",
+            STATUS_FLOAT_INVALID_OPERATION => "STATUS_FLOAT_INVALID_OPERATION",
+            STATUS_FLOAT_OVERFLOW => "STATUS_FLOAT_OVERFLOW",
+            STATUS_FLOAT_STACK_CHECK => "STATUS_FLOAT_STACK_CHECK",
+            STATUS_FLOAT_UNDERFLOW => "STATUS_FLOAT_UNDERFLOW",
+            STATUS_INTEGER_DIVIDE_BY_ZERO => "STATUS_INTEGER_DIVIDE_BY_ZERO",
+            STATUS_INTEGER_OVERFLOW => "STATUS_INTEGER_OVERFLOW",
+            STATUS_PRIVILEGED_INSTRUCTION => "STATUS_PRIVILEGED_INSTRUCTION",
+            STATUS_STACK_OVERFLOW => "STATUS_STACK_OVERFLOW",
+            STATUS_DLL_NOT_FOUND => "STATUS_DLL_NOT_FOUND",
+            STATUS_ORDINAL_NOT_FOUND => "STATUS_ORDINAL_NOT_FOUND",
+            STATUS_ENTRYPOINT_NOT_FOUND => "STATUS_ENTRYPOINT_NOT_FOUND",
+            STATUS_CONTROL_C_EXIT => "STATUS_CONTROL_C_EXIT",
+            STATUS_DLL_INIT_FAILED => "STATUS_DLL_INIT_FAILED",
+            STATUS_FLOAT_MULTIPLE_FAULTS => "STATUS_FLOAT_MULTIPLE_FAULTS",
+            STATUS_FLOAT_MULTIPLE_TRAPS => "STATUS_FLOAT_MULTIPLE_TRAPS",
+            STATUS_REG_NAT_CONSUMPTION => "STATUS_REG_NAT_CONSUMPTION",
+            STATUS_HEAP_CORRUPTION => "STATUS_HEAP_CORRUPTION",
+            STATUS_STACK_BUFFER_OVERRUN => "STATUS_STACK_BUFFER_OVERRUN",
+            STATUS_ASSERTION_FAILURE => "STATUS_ASSERTION_FAILURE",
+            _ => return base,
+        };
+        base.push_str(", ");
+        base.push_str(extra);
+        base
     }
 }
 
-pub fn internal<S: fmt::Display>(error: S) -> CargoError {
+pub fn internal<S: fmt::Display>(error: S) -> failure::Error {
     _internal(&error)
 }
 
-fn _internal(error: &fmt::Display) -> CargoError {
-    Internal::new(format_err!("{}", error)).into()
+fn _internal(error: &dyn fmt::Display) -> failure::Error {
+    Internal::new(failure::format_err!("{}", error)).into()
 }

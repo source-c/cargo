@@ -1,19 +1,19 @@
 #![allow(deprecated)]
 
-use hex::ToHex;
-use std::hash::{Hasher, Hash, SipHasher};
+use hex;
+use std::hash::{Hash, Hasher, SipHasher};
 
 pub fn to_hex(num: u64) -> String {
-    [
-        (num >>  0) as u8,
-        (num >>  8) as u8,
+    hex::encode(&[
+        (num >> 0) as u8,
+        (num >> 8) as u8,
         (num >> 16) as u8,
         (num >> 24) as u8,
         (num >> 32) as u8,
         (num >> 40) as u8,
         (num >> 48) as u8,
         (num >> 56) as u8,
-    ].to_hex()
+    ])
 }
 
 pub fn hash_u64<H: Hash>(hashable: &H) -> u64 {

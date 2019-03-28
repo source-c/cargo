@@ -1,88 +1,131 @@
+use std::borrow::Borrow;
+use std::collections::BTreeSet;
 use std::fmt;
-use std::hash::Hash;
-use std::collections::hash_set::{HashSet, Iter};
-use std::collections::hash_map::{HashMap, Keys};
 
-pub struct Graph<N> {
-    nodes: HashMap<N, HashSet<N>>
+use im_rc;
+
+pub struct Graph<N: Clone, E: Clone> {
+    nodes: im_rc::OrdMap<N, im_rc::OrdMap<N, E>>,
 }
 
-enum Mark {
-    InProgress,
-    Done
-}
-
-pub type Nodes<'a, N> = Keys<'a, N, HashSet<N>>;
-pub type Edges<'a, N> = Iter<'a, N>;
-
-impl<N: Eq + Hash + Clone> Graph<N> {
-    pub fn new() -> Graph<N> {
-        Graph { nodes: HashMap::new() }
+impl<N: Eq + Ord + Clone, E: Default + Clone> Graph<N, E> {
+    pub fn new() -> Graph<N, E> {
+        Graph {
+            nodes: im_rc::OrdMap::new(),
+        }
     }
 
-    pub fn add(&mut self, node: N, children: &[N]) {
-        self.nodes.entry(node)
-            .or_insert_with(HashSet::new)
-            .extend(children.iter().cloned());
+    pub fn add(&mut self, node: N) {
+        self.nodes.entry(node).or_insert_with(im_rc::OrdMap::new);
     }
 
-    pub fn link(&mut self, node: N, child: N) {
-        self.nodes.entry(node).or_insert_with(HashSet::new).insert(child);
+    pub fn link(&mut self, node: N, child: N) -> &mut E {
+        self.nodes
+            .entry(node)
+            .or_insert_with(im_rc::OrdMap::new)
+            .entry(child)
+            .or_insert_with(Default::default)
     }
 
-    pub fn get_nodes(&self) -> &HashMap<N, HashSet<N>> {
-        &self.nodes
+    pub fn contains<Q: ?Sized>(&self, k: &Q) -> bool
+    where
+        N: Borrow<Q>,
+        Q: Ord + Eq,
+    {
+        self.nodes.contains_key(k)
     }
 
-    pub fn edges(&self, node: &N) -> Option<Edges<N>> {
-        self.nodes.get(node).map(|set| set.iter())
+    pub fn edge(&self, from: &N, to: &N) -> Option<&E> {
+        self.nodes.get(from)?.get(to)
     }
 
-    pub fn sort(&self) -> Option<Vec<N>> {
+    pub fn edges(&self, from: &N) -> impl Iterator<Item = &(N, E)> {
+        self.nodes.get(from).into_iter().flat_map(|x| x.iter())
+    }
+
+    /// A topological sort of the `Graph`
+    pub fn sort(&self) -> Vec<N> {
         let mut ret = Vec::new();
-        let mut marks = HashMap::new();
+        let mut marks = BTreeSet::new();
 
         for node in self.nodes.keys() {
-            self.visit(node, &mut ret, &mut marks);
+            self.sort_inner_visit(node, &mut ret, &mut marks);
         }
 
-        Some(ret)
+        ret
     }
 
-    fn visit(&self, node: &N, dst: &mut Vec<N>, marks: &mut HashMap<N, Mark>) {
-        if marks.contains_key(node) {
+    fn sort_inner_visit(&self, node: &N, dst: &mut Vec<N>, marks: &mut BTreeSet<N>) {
+        if !marks.insert(node.clone()) {
             return;
         }
 
-        marks.insert(node.clone(), Mark::InProgress);
-
-        for child in &self.nodes[node] {
-            self.visit(child, dst, marks);
+        for child in self.nodes[node].keys() {
+            self.sort_inner_visit(child, dst, marks);
         }
 
         dst.push(node.clone());
-        marks.insert(node.clone(), Mark::Done);
     }
 
-    pub fn iter(&self) -> Nodes<N> {
+    pub fn iter(&self) -> impl Iterator<Item = &N> {
         self.nodes.keys()
+    }
+
+    /// Resolves one of the paths from the given dependent package down to
+    /// a leaf.
+    pub fn path_to_bottom<'a>(&'a self, mut pkg: &'a N) -> Vec<&'a N> {
+        let mut result = vec![pkg];
+        while let Some(p) = self.nodes.get(pkg).and_then(|p| {
+            p.iter()
+                // Note that we can have "cycles" introduced through dev-dependency
+                // edges, so make sure we don't loop infinitely.
+                .find(|&(node, _)| !result.contains(&node))
+                .map(|(ref p, _)| p)
+        }) {
+            result.push(p);
+            pkg = p;
+        }
+        result
+    }
+
+    /// Resolves one of the paths from the given dependent package up to
+    /// the root.
+    pub fn path_to_top<'a>(&'a self, mut pkg: &'a N) -> Vec<&'a N> {
+        // Note that this implementation isn't the most robust per se, we'll
+        // likely have to tweak this over time. For now though it works for what
+        // it's used for!
+        let mut result = vec![pkg];
+        let first_pkg_depending_on = |pkg: &N, res: &[&N]| {
+            self.nodes
+                .iter()
+                .filter(|&(_, adjacent)| adjacent.contains_key(pkg))
+                // Note that we can have "cycles" introduced through dev-dependency
+                // edges, so make sure we don't loop infinitely.
+                .find(|&(node, _)| !res.contains(&node))
+                .map(|(ref p, _)| p)
+        };
+        while let Some(p) = first_pkg_depending_on(pkg, &result) {
+            result.push(p);
+            pkg = p;
+        }
+        result
     }
 }
 
-impl<N: Eq + Hash + Clone> Default for Graph<N> {
-    fn default() -> Graph<N> {
+impl<N: Eq + Ord + Clone, E: Default + Clone> Default for Graph<N, E> {
+    fn default() -> Graph<N, E> {
         Graph::new()
     }
 }
 
-impl<N: fmt::Display + Eq + Hash> fmt::Debug for Graph<N> {
-    fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
+impl<N: fmt::Display + Eq + Ord + Clone, E: Clone> fmt::Debug for Graph<N, E> {
+    fn fmt(&self, fmt: &mut fmt::Formatter<'_>) -> fmt::Result {
         writeln!(fmt, "Graph {{")?;
 
         for (n, e) in &self.nodes {
             writeln!(fmt, "  - {}", n)?;
 
-            for n in e.iter() {
+            for n in e.keys() {
                 writeln!(fmt, "    - {}", n)?;
             }
         }
@@ -93,13 +136,17 @@ impl<N: fmt::Display + Eq + Hash> fmt::Debug for Graph<N> {
     }
 }
 
-impl<N: Eq + Hash> PartialEq for Graph<N> {
-    fn eq(&self, other: &Graph<N>) -> bool { self.nodes.eq(&other.nodes) }
+impl<N: Eq + Ord + Clone, E: Eq + Clone> PartialEq for Graph<N, E> {
+    fn eq(&self, other: &Graph<N, E>) -> bool {
+        self.nodes.eq(&other.nodes)
+    }
 }
-impl<N: Eq + Hash> Eq for Graph<N> {}
+impl<N: Eq + Ord + Clone, E: Eq + Clone> Eq for Graph<N, E> {}
 
-impl<N: Eq + Hash + Clone> Clone for Graph<N> {
-    fn clone(&self) -> Graph<N> {
-        Graph { nodes: self.nodes.clone() }
+impl<N: Eq + Ord + Clone, E: Clone> Clone for Graph<N, E> {
+    fn clone(&self) -> Graph<N, E> {
+        Graph {
+            nodes: self.nodes.clone(),
+        }
     }
 }

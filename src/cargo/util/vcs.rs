@@ -1,9 +1,31 @@
-use std::path::Path;
 use std::fs::create_dir;
+use std::path::Path;
 
 use git2;
 
-use util::{CargoResult, process};
+use crate::util::{process, CargoResult};
+
+// Check if we are in an existing repo. We define that to be true if either:
+//
+// 1. We are in a git repo and the path to the new package is not an ignored
+//    path in that repo.
+// 2. We are in an HG repo.
+pub fn existing_vcs_repo(path: &Path, cwd: &Path) -> bool {
+    fn in_git_repo(path: &Path, cwd: &Path) -> bool {
+        if let Ok(repo) = GitRepo::discover(path, cwd) {
+            // Don't check if the working directory itself is ignored.
+            if repo.workdir().map_or(false, |workdir| workdir == path) {
+                true
+            } else {
+                !repo.is_path_ignored(path).unwrap_or(false)
+            }
+        } else {
+            false
+        }
+    }
+
+    in_git_repo(path, cwd) || HgRepo::discover(path, cwd).is_ok()
+}
 
 pub struct HgRepo;
 pub struct GitRepo;
@@ -15,7 +37,7 @@ impl GitRepo {
         git2::Repository::init(path)?;
         Ok(GitRepo)
     }
-    pub fn discover(path: &Path, _: &Path) -> Result<git2::Repository,git2::Error> {
+    pub fn discover(path: &Path, _: &Path) -> Result<git2::Repository, git2::Error> {
         git2::Repository::discover(path)
     }
 }
@@ -26,7 +48,12 @@ impl HgRepo {
         Ok(HgRepo)
     }
     pub fn discover(path: &Path, cwd: &Path) -> CargoResult<HgRepo> {
-        process("hg").cwd(cwd).arg("root").cwd(path).exec_with_output()?;
+        process("hg")
+            .cwd(cwd)
+            .arg("--cwd")
+            .arg(path)
+            .arg("root")
+            .exec_with_output()?;
         Ok(HgRepo)
     }
 }
@@ -49,16 +76,28 @@ impl FossilRepo {
         db_path.push(db_fname);
 
         // then create the fossil DB in that location
-        process("fossil").cwd(cwd).arg("init").arg(&db_path).exec()?;
+        process("fossil")
+            .cwd(cwd)
+            .arg("init")
+            .arg(&db_path)
+            .exec()?;
 
         // open it in that new directory
-        process("fossil").cwd(&path).arg("open").arg(db_fname).exec()?;
+        process("fossil")
+            .cwd(&path)
+            .arg("open")
+            .arg(db_fname)
+            .exec()?;
 
         // set `target` as ignoreable and cleanable
-        process("fossil").cwd(cwd).arg("settings")
+        process("fossil")
+            .cwd(cwd)
+            .arg("settings")
             .arg("ignore-glob")
             .arg("target");
-        process("fossil").cwd(cwd).arg("settings")
+        process("fossil")
+            .cwd(cwd)
+            .arg("settings")
             .arg("clean-glob")
             .arg("target");
         Ok(FossilRepo)

@@ -2,12 +2,14 @@
 
 Cargo downloads your Rust project’s dependencies and compiles your project.
 
-Learn more at http://doc.crates.io/
+Learn more at https://doc.rust-lang.org/cargo/
 
 ## Code Status
 
-[![Build Status](https://travis-ci.org/rust-lang/cargo.svg?branch=master)](https://travis-ci.org/rust-lang/cargo)
+[![Build Status](https://travis-ci.com/rust-lang/cargo.svg?branch=master)](https://travis-ci.com/rust-lang/cargo)
 [![Build Status](https://ci.appveyor.com/api/projects/status/github/rust-lang/cargo?branch=master&svg=true)](https://ci.appveyor.com/project/rust-lang-libs/cargo)
+
+Code documentation: https://docs.rs/cargo/
 
 ## Installing Cargo
 
@@ -18,16 +20,16 @@ locally you probably also have `cargo` installed locally.
 
 Cargo requires the following tools and packages to build:
 
+* `git`
 * `python`
 * `curl` (on Unix)
-* `cmake`
 * OpenSSL headers (only for Unix, this is the `libssl-dev` package on ubuntu)
 * `cargo` and `rustc`
 
 First, you'll want to check out this repository
 
 ```
-git clone --recursive https://github.com/rust-lang/cargo
+git clone https://github.com/rust-lang/cargo
 cd cargo
 ```
 
@@ -57,13 +59,13 @@ Cargo releases coincide with Rust releases.
 
 Found a bug? We'd love to know about it!
 
-Please report all issues on the github [issue tracker][issues].
+Please report all issues on the GitHub [issue tracker][issues].
 
 [issues]: https://github.com/rust-lang/cargo/issues
 
 ## Contributing
 
-See [CONTRIBUTING.md](CONTRIBUTING.md). You may also find the arhitecture
+See [CONTRIBUTING.md](CONTRIBUTING.md). You may also find the architecture
 documentation useful ([ARCHITECTURE.md](ARCHITECTURE.md)).
 
 ## License
@@ -76,7 +78,7 @@ See LICENSE-APACHE and LICENSE-MIT for details.
 ### Third party software
 
 This product includes software developed by the OpenSSL Project
-for use in the OpenSSL Toolkit (http://www.openssl.org/).
+for use in the OpenSSL Toolkit (https://www.openssl.org/).
 
 In binary form, this product includes software that is licensed under the
 terms of the GNU General Public License, version 2, with a linking exception,
