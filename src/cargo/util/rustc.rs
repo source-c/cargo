@@ -20,7 +20,7 @@ pub struct Rustc {
     pub path: PathBuf,
     /// An optional program that will be passed the path of the rust exe as its first argument, and
     /// rustc args following this.
-    pub wrapper: Option<PathBuf>,
+    pub wrapper: Option<ProcessBuilder>,
     /// Verbose version information (the output of `rustc -vV`)
     pub verbose_version: String,
     /// The host triple (arch-platform-OS), this comes from verbose_version.
@@ -59,7 +59,7 @@ impl Rustc {
 
         Ok(Rustc {
             path,
-            wrapper,
+            wrapper: wrapper.map(util::process),
             verbose_version,
             host,
             cache: Mutex::new(cache),
@@ -69,8 +69,8 @@ impl Rustc {
     /// Gets a process builder set up to use the found rustc version, with a wrapper if `Some`.
     pub fn process(&self) -> ProcessBuilder {
         match self.wrapper {
-            Some(ref wrapper) if !wrapper.as_os_str().is_empty() => {
-                let mut cmd = util::process(wrapper);
+            Some(ref wrapper) if !wrapper.get_program().is_empty() => {
+                let mut cmd = wrapper.clone();
                 cmd.arg(&self.path);
                 cmd
             }
@@ -89,13 +89,17 @@ impl Rustc {
     pub fn cached_success(&self, cmd: &ProcessBuilder) -> CargoResult<bool> {
         self.cache.lock().unwrap().cached_success(cmd)
     }
+
+    pub fn set_wrapper(&mut self, wrapper: ProcessBuilder) {
+        self.wrapper = Some(wrapper);
+    }
 }
 
-/// It is a well known that `rustc` is not the fastest compiler in the world.
-/// What is less known is that even `rustc --version --verbose` takes about a
-/// hundred milliseconds! Because we need compiler version info even for no-op
-/// builds, we cache it here, based on compiler's mtime and rustup's current
-/// toolchain.
+/// It is a well known fact that `rustc` is not the fastest compiler in the
+/// world.  What is less known is that even `rustc --version --verbose` takes
+/// about a hundred milliseconds! Because we need compiler version info even
+/// for no-op builds, we cache it here, based on compiler's mtime and rustup's
+/// current toolchain.
 ///
 /// https://github.com/rust-lang/cargo/issues/5315
 /// https://github.com/rust-lang/rust/issues/49761

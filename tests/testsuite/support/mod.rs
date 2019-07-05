@@ -139,8 +139,6 @@ pub mod git;
 pub mod paths;
 pub mod publish;
 pub mod registry;
-#[macro_use]
-pub mod resolver;
 
 /*
  *
@@ -579,6 +577,7 @@ pub struct Execs {
     expect_stderr_not_contains: Vec<String>,
     expect_stderr_unordered: Vec<String>,
     expect_neither_contains: Vec<String>,
+    expect_stderr_with_without: Vec<(Vec<String>, Vec<String>)>,
     expect_json: Option<Vec<Value>>,
     expect_json_contains_unordered: Vec<Value>,
     stream_output: bool,
@@ -696,6 +695,37 @@ impl Execs {
         self
     }
 
+    /// Verify that a particular line appears in stderr with and without the
+    /// given substrings. Exactly one line must match.
+    ///
+    /// The substrings are matched as `contains`. Example:
+    ///
+    /// ```no_run
+    /// execs.with_stderr_line_without(
+    ///     &[
+    ///         "[RUNNING] `rustc --crate-name build_script_build",
+    ///         "-C opt-level=3",
+    ///     ],
+    ///     &["-C debuginfo", "-C incremental"],
+    /// )
+    /// ```
+    ///
+    /// This will check that a build line includes `-C opt-level=3` but does
+    /// not contain `-C debuginfo` or `-C incremental`.
+    ///
+    /// Be careful writing the `without` fragments, see note in
+    /// `with_stderr_does_not_contain`.
+    pub fn with_stderr_line_without<S: ToString>(
+        &mut self,
+        with: &[S],
+        without: &[S],
+    ) -> &mut Self {
+        let with = with.iter().map(|s| s.to_string()).collect();
+        let without = without.iter().map(|s| s.to_string()).collect();
+        self.expect_stderr_with_without.push((with, without));
+        self
+    }
+
     /// Verifies the JSON output matches the given JSON.
     /// Typically used when testing cargo commands that emit JSON.
     /// Each separate JSON object should be separated by a blank line.
@@ -759,7 +789,8 @@ impl Execs {
     pub fn cwd<T: AsRef<OsStr>>(&mut self, path: T) -> &mut Self {
         if let Some(ref mut p) = self.process_builder {
             if let Some(cwd) = p.get_cwd() {
-                p.cwd(cwd.join(path.as_ref()));
+                let new_path = cwd.join(path.as_ref());
+                p.cwd(new_path);
             } else {
                 p.cwd(path);
             }
@@ -830,6 +861,7 @@ impl Execs {
             && self.expect_stderr_not_contains.is_empty()
             && self.expect_stderr_unordered.is_empty()
             && self.expect_neither_contains.is_empty()
+            && self.expect_stderr_with_without.is_empty()
             && self.expect_json.is_none()
             && self.expect_json_contains_unordered.is_empty()
         {
@@ -850,8 +882,14 @@ impl Execs {
                 panic!("`.stream()` is for local debugging")
             }
             process.exec_with_streaming(
-                &mut |out| Ok(println!("{}", out)),
-                &mut |err| Ok(eprintln!("{}", err)),
+                &mut |out| {
+                    println!("{}", out);
+                    Ok(())
+                },
+                &mut |err| {
+                    eprintln!("{}", err);
+                    Ok(())
+                },
                 true,
             )
         } else {
@@ -1004,6 +1042,10 @@ impl Execs {
             }
         }
 
+        for (with, without) in self.expect_stderr_with_without.iter() {
+            self.match_with_without(&actual.stderr, with, without)?;
+        }
+
         if let Some(ref objects) = self.expect_json {
             let stdout = str::from_utf8(&actual.stdout)
                 .map_err(|_| "stdout was not utf8 encoded".to_owned())?;
@@ -1063,6 +1105,32 @@ impl Execs {
         )
     }
 
+    fn normalize_actual(&self, description: &str, actual: &[u8]) -> Result<String, String> {
+        let actual = match str::from_utf8(actual) {
+            Err(..) => return Err(format!("{} was not utf8 encoded", description)),
+            Ok(actual) => actual,
+        };
+        // Let's not deal with \r\n vs \n on windows...
+        let actual = actual.replace("\r", "");
+        let actual = actual.replace("\t", "<tab>");
+        Ok(actual)
+    }
+
+    fn replace_expected(&self, expected: &str) -> String {
+        // Do the template replacements on the expected string.
+        let replaced = match self.process_builder {
+            None => expected.to_string(),
+            Some(ref p) => match p.get_cwd() {
+                None => expected.to_string(),
+                Some(cwd) => expected.replace("[CWD]", &cwd.display().to_string()),
+            },
+        };
+
+        // On Windows, we need to use a wildcard for the drive,
+        // because we don't actually know what it will be.
+        replaced.replace("[ROOT]", if cfg!(windows) { r#"[..]:\"# } else { "/" })
+    }
+
     fn match_std(
         &self,
         expected: Option<&String>,
@@ -1072,30 +1140,11 @@ impl Execs {
         kind: MatchKind,
     ) -> MatchResult {
         let out = match expected {
-            Some(out) => {
-                // Do the template replacements on the expected string.
-                let replaced = match self.process_builder {
-                    None => out.to_string(),
-                    Some(ref p) => match p.get_cwd() {
-                        None => out.to_string(),
-                        Some(cwd) => out.replace("[CWD]", &cwd.display().to_string()),
-                    },
-                };
-
-                // On Windows, we need to use a wildcard for the drive,
-                // because we don't actually know what it will be.
-                replaced.replace("[ROOT]", if cfg!(windows) { r#"[..]:\"# } else { "/" })
-            }
+            Some(out) => self.replace_expected(out),
             None => return Ok(()),
         };
 
-        let actual = match str::from_utf8(actual) {
-            Err(..) => return Err(format!("{} was not utf8 encoded", description)),
-            Ok(actual) => actual,
-        };
-        // Let's not deal with `\r\n` vs `\n` on Windows.
-        let actual = actual.replace("\r", "");
-        let actual = actual.replace("\t", "<tab>");
+        let actual = self.normalize_actual(description, actual)?;
 
         match kind {
             MatchKind::Exact => {
@@ -1121,7 +1170,7 @@ impl Execs {
                 let e = out.lines();
 
                 let mut diffs = self.diff_lines(a.clone(), e.clone(), true);
-                while let Some(..) = a.next() {
+                while a.next().is_some() {
                     let a = self.diff_lines(a.clone(), e.clone(), true);
                     if a.len() < diffs.len() {
                         diffs = a;
@@ -1169,7 +1218,7 @@ impl Execs {
                 let e = out.lines();
 
                 let mut diffs = self.diff_lines(a.clone(), e.clone(), true);
-                while let Some(..) = a.next() {
+                while a.next().is_some() {
                     let a = self.diff_lines(a.clone(), e.clone(), true);
                     if a.len() < diffs.len() {
                         diffs = a;
@@ -1216,6 +1265,47 @@ impl Execs {
                     Ok(())
                 }
             }
+        }
+    }
+
+    fn match_with_without(
+        &self,
+        actual: &[u8],
+        with: &[String],
+        without: &[String],
+    ) -> MatchResult {
+        let actual = self.normalize_actual("stderr", actual)?;
+        let contains = |s, line| {
+            let mut s = self.replace_expected(s);
+            s.insert_str(0, "[..]");
+            s.push_str("[..]");
+            lines_match(&s, line)
+        };
+        let matches: Vec<&str> = actual
+            .lines()
+            .filter(|line| with.iter().all(|with| contains(with, line)))
+            .filter(|line| !without.iter().any(|without| contains(without, line)))
+            .collect();
+        match matches.len() {
+            0 => Err(format!(
+                "Could not find expected line in output.\n\
+                 With contents: {:?}\n\
+                 Without contents: {:?}\n\
+                 Actual stderr:\n\
+                 {}\n",
+                with, without, actual
+            )),
+            1 => Ok(()),
+            _ => Err(format!(
+                "Found multiple matching lines, but only expected one.\n\
+                 With contents: {:?}\n\
+                 Without contents: {:?}\n\
+                 Matching lines:\n\
+                 {}\n",
+                with,
+                without,
+                matches.join("\n")
+            )),
         }
     }
 
@@ -1305,7 +1395,7 @@ pub fn lines_match(expected: &str, actual: &str) -> bool {
     actual.is_empty() || expected.ends_with("[..]")
 }
 
-#[test]
+#[cargo_test]
 fn lines_match_works() {
     assert!(lines_match("a b", "a b"));
     assert!(lines_match("a[..]b", "a b"));
@@ -1436,6 +1526,7 @@ pub fn execs() -> Execs {
         expect_stderr_not_contains: Vec::new(),
         expect_stderr_unordered: Vec::new(),
         expect_neither_contains: Vec::new(),
+        expect_stderr_with_without: Vec::new(),
         expect_json: None,
         expect_json_contains_unordered: Vec::new(),
         stream_output: false,
@@ -1529,7 +1620,11 @@ fn substitute_macros(input: &str) -> String {
         ("[UNPACKING]", "   Unpacking"),
         ("[SUMMARY]", "     Summary"),
         ("[FIXING]", "      Fixing"),
-        ("[EXE]",           env::consts::EXE_SUFFIX),
+        ("[EXE]", env::consts::EXE_SUFFIX),
+        ("[IGNORED]", "     Ignored"),
+        ("[INSTALLED]", "   Installed"),
+        ("[REPLACED]", "    Replaced"),
+        ("[NOTE]", "        Note"),
     ];
     let mut result = input.to_owned();
     for &(pat, subst) in &macros {
@@ -1589,6 +1684,7 @@ fn _process(t: &OsStr) -> cargo::util::ProcessBuilder {
         .env_remove("XDG_CONFIG_HOME") // see #2345
         .env("GIT_CONFIG_NOSYSTEM", "1") // keep trying to sandbox ourselves
         .env_remove("EMAIL")
+        .env_remove("USER") // not set on some rust-lang docker images
         .env_remove("MFLAGS")
         .env_remove("MAKEFLAGS")
         .env_remove("CARGO_MAKEFLAGS")
@@ -1648,7 +1744,7 @@ pub fn is_coarse_mtime() -> bool {
 }
 
 /// Some CI setups are much slower then the equipment used by Cargo itself.
-/// Architectures that do not have a modern processor, hardware emulation, ect.
+/// Architectures that do not have a modern processor, hardware emulation, etc.
 /// This provides a way for those setups to increase the cut off for all the time based test.
 pub fn slow_cpu_multiplier(main: u64) -> Duration {
     lazy_static::lazy_static! {

@@ -1,3 +1,4 @@
+use std::ffi::{OsStr, OsString};
 use std::fs;
 use std::path::PathBuf;
 
@@ -141,7 +142,10 @@ pub trait AppExt: Sized {
     }
 
     fn arg_build_plan(self) -> Self {
-        self._arg(opt("build-plan", "Output the build plan in JSON"))
+        self._arg(opt(
+            "build-plan",
+            "Output the build plan in JSON (unstable)",
+        ))
     }
 
     fn arg_new_opts(self) -> Self {
@@ -315,10 +319,10 @@ pub trait ArgMatchesExt {
         build_config.message_format = message_format;
         build_config.release = self._is_present("release");
         build_config.build_plan = self._is_present("build-plan");
-        if build_config.build_plan && !config.cli_unstable().unstable_options {
-            Err(failure::format_err!(
-                "`--build-plan` flag is unstable, pass `-Z unstable-options` to enable it"
-            ))?;
+        if build_config.build_plan {
+            config
+                .cli_unstable()
+                .fail_if_stable_opt("--build-plan", 5579)?;
         };
 
         let opts = CompileOptions {
@@ -460,6 +464,10 @@ about this warning.";
 
     fn _values_of(&self, name: &str) -> Vec<String>;
 
+    fn _value_of_os(&self, name: &str) -> Option<&OsStr>;
+
+    fn _values_of_os(&self, name: &str) -> Vec<OsString>;
+
     fn _is_present(&self, name: &str) -> bool;
 }
 
@@ -468,10 +476,21 @@ impl<'a> ArgMatchesExt for ArgMatches<'a> {
         self.value_of(name)
     }
 
+    fn _value_of_os(&self, name: &str) -> Option<&OsStr> {
+        self.value_of_os(name)
+    }
+
     fn _values_of(&self, name: &str) -> Vec<String> {
         self.values_of(name)
             .unwrap_or_default()
             .map(|s| s.to_string())
+            .collect()
+    }
+
+    fn _values_of_os(&self, name: &str) -> Vec<OsString> {
+        self.values_of_os(name)
+            .unwrap_or_default()
+            .map(|s| s.to_os_string())
             .collect()
     }
 
@@ -484,6 +503,10 @@ pub fn values(args: &ArgMatches<'_>, name: &str) -> Vec<String> {
     args._values_of(name)
 }
 
+pub fn values_os(args: &ArgMatches<'_>, name: &str) -> Vec<OsString> {
+    args._values_of_os(name)
+}
+
 #[derive(PartialEq, PartialOrd, Eq, Ord)]
 pub enum CommandInfo {
     BuiltIn { name: String, about: Option<String> },
@@ -491,10 +514,10 @@ pub enum CommandInfo {
 }
 
 impl CommandInfo {
-    pub fn name(&self) -> String {
+    pub fn name(&self) -> &str {
         match self {
-            CommandInfo::BuiltIn { name, .. } => name.to_string(),
-            CommandInfo::External { name, .. } => name.to_string(),
+            CommandInfo::BuiltIn { name, .. } => &name,
+            CommandInfo::External { name, .. } => &name,
         }
     }
 }

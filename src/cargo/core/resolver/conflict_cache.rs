@@ -18,41 +18,58 @@ enum ConflictStoreTrie {
 
 impl ConflictStoreTrie {
     /// Finds any known set of conflicts, if any,
-    /// which are activated in `cx` and pass the `filter` specified?
-    fn find_conflicting(
+    /// where all elements return some from `is_active` and contain `PackageId` specified.
+    /// If more then one are activated, then it will return
+    /// one that will allow for the most jump-back.
+    fn find(
         &self,
-        cx: &Context,
+        is_active: &impl Fn(PackageId) -> Option<usize>,
         must_contain: Option<PackageId>,
-    ) -> Option<&ConflictMap> {
+        mut max_age: usize,
+    ) -> Option<(&ConflictMap, usize)> {
         match self {
             ConflictStoreTrie::Leaf(c) => {
                 if must_contain.is_none() {
-                    // `is_conflicting` checks that all the elements are active,
-                    // but we have checked each one by the recursion of this function.
-                    debug_assert!(cx.is_conflicting(None, c));
-                    Some(c)
+                    Some((c, 0))
                 } else {
                     // We did not find `must_contain`, so we need to keep looking.
                     None
                 }
             }
             ConflictStoreTrie::Node(m) => {
+                let mut out = None;
                 for (&pid, store) in must_contain
                     .map(|f| m.range(..=f))
                     .unwrap_or_else(|| m.range(..))
                 {
                     // If the key is active, then we need to check all of the corresponding subtrie.
-                    if cx.is_active(pid) {
-                        if let Some(o) =
-                            store.find_conflicting(cx, must_contain.filter(|&f| f != pid))
+                    if let Some(age_this) = is_active(pid) {
+                        if age_this >= max_age && must_contain != Some(pid) {
+                            // not worth looking at, it is to old.
+                            continue;
+                        }
+                        if let Some((o, age_o)) =
+                            store.find(is_active, must_contain.filter(|&f| f != pid), max_age)
                         {
-                            return Some(o);
+                            let age = if must_contain == Some(pid) {
+                                // all the results will include `must_contain`
+                                // so the age of must_contain is not relevant to find the best result.
+                                age_o
+                            } else {
+                                std::cmp::max(age_this, age_o)
+                            };
+                            if max_age > age {
+                                // we found one that can jump-back further so replace the out.
+                                out = Some((o, age));
+                                // and dont look at anything older
+                                max_age = age
+                            }
                         }
                     }
                     // Else, if it is not active then there is no way any of the corresponding
                     // subtrie will be conflicting.
                 }
-                None
+                out
             }
         }
     }
@@ -136,21 +153,33 @@ impl ConflictCache {
             dep_from_pid: HashMap::new(),
         }
     }
+    pub fn find(
+        &self,
+        dep: &Dependency,
+        is_active: &impl Fn(PackageId) -> Option<usize>,
+        must_contain: Option<PackageId>,
+        max_age: usize,
+    ) -> Option<&ConflictMap> {
+        self.con_from_dep
+            .get(dep)?
+            .find(is_active, must_contain, max_age)
+            .map(|(c, _)| c)
+    }
     /// Finds any known set of conflicts, if any,
-    /// which are activated in `cx` and pass the `filter` specified?
+    /// which are activated in `cx` and contain `PackageId` specified.
+    /// If more then one are activated, then it will return
+    /// one that will allow for the most jump-back.
     pub fn find_conflicting(
         &self,
         cx: &Context,
         dep: &Dependency,
         must_contain: Option<PackageId>,
     ) -> Option<&ConflictMap> {
-        let out = self
-            .con_from_dep
-            .get(dep)?
-            .find_conflicting(cx, must_contain);
+        let out = self.find(dep, &|id| cx.is_active(id), must_contain, std::usize::MAX);
         if cfg!(debug_assertions) {
-            if let Some(f) = must_contain {
-                if let Some(c) = &out {
+            if let Some(c) = &out {
+                assert!(cx.is_conflicting(None, c).is_some());
+                if let Some(f) = must_contain {
                     assert!(c.contains_key(&f));
                 }
             }
@@ -189,6 +218,7 @@ impl ConflictCache {
                 .insert(dep.clone());
         }
     }
+
     pub fn dependencies_conflicting_with(&self, pid: PackageId) -> Option<&HashSet<Dependency>> {
         self.dep_from_pid.get(&pid)
     }

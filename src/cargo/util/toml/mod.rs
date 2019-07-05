@@ -21,8 +21,7 @@ use crate::core::{Edition, EitherManifest, Feature, Features, VirtualManifest};
 use crate::core::{GitReference, PackageIdSpec, SourceId, WorkspaceConfig, WorkspaceRootConfig};
 use crate::sources::{CRATES_IO_INDEX, CRATES_IO_REGISTRY};
 use crate::util::errors::{CargoResult, CargoResultExt, ManifestError};
-use crate::util::paths;
-use crate::util::{self, validate_package_name, Config, ToUrl};
+use crate::util::{self, paths, validate_package_name, Config, IntoUrl};
 
 mod targets;
 use self::targets::targets;
@@ -239,6 +238,7 @@ pub struct DetailedTomlDependency {
     #[serde(rename = "default_features")]
     default_features2: Option<bool>,
     package: Option<String>,
+    public: Option<bool>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -822,7 +822,7 @@ impl TomlManifest {
         }
     }
 
-    fn to_real_manifest(
+    pub fn to_real_manifest(
         me: &Rc<TomlManifest>,
         source_id: SourceId,
         package_root: &Path,
@@ -1033,9 +1033,14 @@ impl TomlManifest {
         let publish_lockfile = match project.publish_lockfile {
             Some(b) => {
                 features.require(Feature::publish_lockfile())?;
+                warnings.push(
+                    "The `publish-lockfile` feature is deprecated and currently \
+                     has no effect. It may be removed in a future version."
+                        .to_string(),
+                );
                 b
             }
-            None => false,
+            None => features.is_enabled(Feature::publish_lockfile()),
         };
 
         if summary.features().contains_key("default-features") {
@@ -1044,6 +1049,18 @@ impl TomlManifest {
                  Did you mean to use `default = [\"..\"]`?"
                     .to_string(),
             )
+        }
+
+        if let Some(run) = &project.default_run {
+            if !targets
+                .iter()
+                .filter(|t| t.is_bin())
+                .any(|t| t.name() == run)
+            {
+                let suggestion =
+                    util::closest_msg(&run, targets.iter().filter(|t| t.is_bin()), |t| t.name());
+                bail!("default-run target `{}` not found{}", run, suggestion);
+            }
         }
 
         let custom_metadata = project.metadata.clone();
@@ -1201,7 +1218,7 @@ impl TomlManifest {
                 );
             }
 
-            let mut dep = replacement.to_dependency(spec.name(), cx, None)?;
+            let mut dep = replacement.to_dependency(spec.name().as_str(), cx, None)?;
             {
                 let version = spec.version().ok_or_else(|| {
                     failure::format_err!(
@@ -1225,7 +1242,7 @@ impl TomlManifest {
                 _ => cx
                     .config
                     .get_registry_index(url)
-                    .or_else(|_| url.to_url())
+                    .or_else(|_| url.into_url())
                     .chain_err(|| {
                         format!("[patch] entry `{}` should be a URL or registry name", url)
                     })?,
@@ -1318,6 +1335,17 @@ impl DetailedTomlDependency {
             cx.warnings.push(msg);
         }
 
+        if let Some(version) = &self.version {
+            if version.contains('+') {
+                cx.warnings.push(format!(
+                    "version requirement `{}` for dependency `{}` \
+                     includes semver metadata which will be ignored, removing the \
+                     metadata is recommended to avoid confusion",
+                    version, name_in_toml
+                ));
+            }
+        }
+
         if self.git.is_none() {
             let git_only_keys = [
                 (&self.branch, "branch"),
@@ -1386,7 +1414,7 @@ impl DetailedTomlDependency {
                     .or_else(|| self.tag.clone().map(GitReference::Tag))
                     .or_else(|| self.rev.clone().map(GitReference::Rev))
                     .unwrap_or_else(|| GitReference::Branch("master".to_string()));
-                let loc = git.to_url()?;
+                let loc = git.into_url()?;
                 SourceId::for_git(&loc, reference)?
             }
             (None, Some(path), _, _) => {
@@ -1409,7 +1437,7 @@ impl DetailedTomlDependency {
             }
             (None, None, Some(registry), None) => SourceId::alt_registry(cx.config, registry)?,
             (None, None, None, Some(registry_index)) => {
-                let url = registry_index.to_url()?;
+                let url = registry_index.into_url()?;
                 SourceId::for_registry(&url)?
             }
             (None, None, None, None) => SourceId::crates_io(cx.config)?,
@@ -1438,7 +1466,7 @@ impl DetailedTomlDependency {
             dep.set_registry_id(registry_id);
         }
         if let Some(registry_index) = &self.registry_index {
-            let url = registry_index.to_url()?;
+            let url = registry_index.into_url()?;
             let registry_id = SourceId::for_registry(&url)?;
             dep.set_registry_id(registry_id);
         }
@@ -1449,6 +1477,16 @@ impl DetailedTomlDependency {
         if let Some(name_in_toml) = explicit_name_in_toml {
             cx.features.require(Feature::rename_dependency())?;
             dep.set_explicit_name_in_toml(name_in_toml);
+        }
+
+        if let Some(p) = self.public {
+            cx.features.require(Feature::public_dependency())?;
+
+            if dep.kind() != Kind::Normal {
+                bail!("'public' specifier can only be used on regular dependencies, not {:?} dependencies", dep.kind());
+            }
+
+            dep.set_public(p);
         }
         Ok(dep)
     }

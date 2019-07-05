@@ -17,9 +17,10 @@
 <h2 id="cargo_install_description">DESCRIPTION</h2>
 <div class="sectionbody">
 <div class="paragraph">
-<p>This command manages Cargo&#8217;s local set of installed binary crates. Only packages
-which have <code>[[bin]]</code> targets can be installed, and all binaries are installed into
-the installation root&#8217;s <code>bin</code> folder.</p>
+<p>This command manages Cargo&#8217;s local set of installed binary crates. Only
+packages which have executable <code>[[bin]]</code> or <code>[[example]]</code> targets can be
+installed, and all executables are installed into the installation root&#8217;s
+<code>bin</code> folder.</p>
 </div>
 <div class="paragraph">
 <p>The installation root is determined, in order of precedence:</p>
@@ -45,10 +46,10 @@ the installation root&#8217;s <code>bin</code> folder.</p>
 </div>
 <div class="paragraph">
 <p>There are multiple sources from which a crate can be installed. The default
-location is crates.io but the <code>--git</code> and <code>--path</code> flags can change this
-source. If the source contains more than one package (such as crates.io or a
-git repository with multiple crates) the <em>CRATE</em> argument is required to
-indicate which crate should be installed.</p>
+location is crates.io but the <code>--git</code>, <code>--path</code>, and <code>--registry</code> flags can
+change this source. If the source contains more than one package (such as
+crates.io or a git repository with multiple crates) the <em>CRATE</em> argument is
+required to indicate which crate should be installed.</p>
 </div>
 <div class="paragraph">
 <p>Crates from crates.io can optionally specify the version they wish to install
@@ -65,6 +66,21 @@ specified by setting the <code>CARGO_TARGET_DIR</code> environment variable to a
 path. In particular, this can be useful for caching build artifacts on
 continuous integration systems.</p>
 </div>
+<div class="paragraph">
+<p>By default, the <code>Cargo.lock</code> file that is included with the package will be
+ignored. This means that Cargo will recompute which versions of dependencies
+to use, possibly using newer versions that have been released since the
+package was published. The <code>--locked</code> flag can be used to force Cargo to use
+the packaged <code>Cargo.lock</code> file if it is available. This may be useful for
+ensuring reproducible builds, to use the exact same set of dependencies that
+were available when the package was published. It may also be useful if a
+newer version of a dependency is published that no longer builds on your
+system, or has other problems. The downside to using <code>--locked</code> is that you
+will not receive any fixes or updates to any dependency. Note that Cargo did
+not start publishing <code>Cargo.lock</code> files until version 1.37, which means
+packages published with prior versions will not have a <code>Cargo.lock</code> file
+available.</p>
+</div>
 </div>
 </div>
 <div class="sect1">
@@ -77,7 +93,7 @@ continuous integration systems.</p>
 <dt class="hdlist1"><strong>--vers</strong> <em>VERSION</em></dt>
 <dt class="hdlist1"><strong>--version</strong> <em>VERSION</em></dt>
 <dd>
-<p>Specify a version to install from crates.io.</p>
+<p>Specify a version to install.</p>
 </dd>
 <dt class="hdlist1"><strong>--git</strong> <em>URL</em></dt>
 <dd>
@@ -182,6 +198,43 @@ list of supported targets.</p>
 <dt class="hdlist1"><strong>--debug</strong></dt>
 <dd>
 <p>Build with the <code>dev</code> profile instead the <code>release</code> profile.</p>
+</dd>
+</dl>
+</div>
+</div>
+<div class="sect2">
+<h3 id="cargo_install_manifest_options">Manifest Options</h3>
+<div class="dlist">
+<dl>
+<dt class="hdlist1"><strong>--frozen</strong></dt>
+<dt class="hdlist1"><strong>--locked</strong></dt>
+<dd>
+<p>Either of these flags requires that the <code>Cargo.lock</code> file is
+up-to-date. If the lock file is missing, or it needs to be updated, Cargo will
+exit with an error. The <code>--frozen</code> flag also prevents Cargo from
+attempting to access the network to determine if it is out-of-date.</p>
+<div class="paragraph">
+<p>These may be used in environments where you want to assert that the
+<code>Cargo.lock</code> file is up-to-date (such as a CI build) or want to avoid network
+access.</p>
+</div>
+</dd>
+<dt class="hdlist1"><strong>--offline</strong></dt>
+<dd>
+<p>Prevents Cargo from accessing the network for any reason. Without this
+flag, Cargo will stop with an error if it needs to access the network and
+the network is not available. With this flag, Cargo will attempt to
+proceed without the network if possible.</p>
+<div class="paragraph">
+<p>Beware that this may result in different dependency resolution than online
+mode. Cargo will restrict itself to crates that are downloaded locally, even
+if there might be a newer version as indicated in the local copy of the index.
+See the <a href="commands/cargo-fetch.html">cargo-fetch(1)</a> command to download dependencies before going
+offline.</p>
+</div>
+<div class="paragraph">
+<p>May also be specified with the <code>net.offline</code> <a href="reference/config.html">config value</a>.</p>
+</div>
 </dd>
 </dl>
 </div>

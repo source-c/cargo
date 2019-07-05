@@ -80,10 +80,7 @@ impl ProcessBuilder {
 
     /// (chainable) Replaces the args list with the given `args`.
     pub fn args_replace<T: AsRef<OsStr>>(&mut self, args: &[T]) -> &mut ProcessBuilder {
-        self.args = args
-            .iter()
-            .map(|t| t.as_ref().to_os_string())
-            .collect();
+        self.args = args.iter().map(|t| t.as_ref().to_os_string()).collect();
         self
     }
 
@@ -215,7 +212,10 @@ impl ProcessBuilder {
     ///
     /// If any invocations of these function return an error, it will be propagated.
     ///
-    /// Optionally, output can be passed to errors using `print_output`
+    /// If `capture_output` is true, then all the output will also be buffered
+    /// and stored in the returned `Output` object. If it is false, no caching
+    /// is done, and the callbacks are solely responsible for handling the
+    /// output.
     pub fn exec_with_streaming(
         &self,
         on_stdout_line: &mut dyn FnMut(&str) -> CargoResult<()>,

@@ -75,28 +75,10 @@ pub struct Compilation<'cfg> {
 
 impl<'cfg> Compilation<'cfg> {
     pub fn new<'a>(bcx: &BuildContext<'a, 'cfg>) -> CargoResult<Compilation<'cfg>> {
-        // If we're using cargo as a rustc wrapper then we're in a situation
-        // like `cargo fix`. For now just disregard the `RUSTC_WRAPPER` env var
-        // (which is typically set to `sccache` for now). Eventually we'll
-        // probably want to implement `RUSTC_WRAPPER` for `cargo fix`, but we'll
-        // leave that open as a bug for now.
-        let mut rustc = if bcx.build_config.cargo_as_rustc_wrapper {
-            let mut rustc = bcx.rustc.process_no_wrapper();
-            let prog = rustc.get_program().to_owned();
-            rustc.env("RUSTC", prog);
-            rustc.program(env::current_exe()?);
-            rustc
-        } else {
-            bcx.rustc.process()
-        };
+        let mut rustc = bcx.rustc.process();
+
         if bcx.config.extra_verbose() {
             rustc.display_env_vars();
-        }
-        for (k, v) in bcx.build_config.extra_rustc_env.iter() {
-            rustc.env(k, v);
-        }
-        for arg in bcx.build_config.extra_rustc_args.iter() {
-            rustc.arg(arg);
         }
         let srv = bcx.build_config.rustfix_diagnostic_server.borrow();
         if let Some(server) = &*srv {
@@ -196,16 +178,17 @@ impl<'cfg> Compilation<'cfg> {
             search_path
         };
 
-        search_path.extend(util::dylib_path().into_iter());
-        if cfg!(target_os = "macos") {
+        let dylib_path = util::dylib_path();
+        let dylib_path_is_empty = dylib_path.is_empty();
+        search_path.extend(dylib_path.into_iter());
+        if cfg!(target_os = "macos") && dylib_path_is_empty {
             // These are the defaults when DYLD_FALLBACK_LIBRARY_PATH isn't
-            // set. Since Cargo is explicitly setting the value, make sure the
-            // defaults still work.
-            if let Ok(home) = env::var("HOME") {
+            // set or set to an empty string. Since Cargo is explicitly setting
+            // the value, make sure the defaults still work.
+            if let Some(home) = env::var_os("HOME") {
                 search_path.push(PathBuf::from(home).join("lib"));
             }
             search_path.push(PathBuf::from("/usr/local/lib"));
-            search_path.push(PathBuf::from("/lib"));
             search_path.push(PathBuf::from("/usr/lib"));
         }
         let search_path = join_paths(&search_path, util::dylib_path_envvar())?;

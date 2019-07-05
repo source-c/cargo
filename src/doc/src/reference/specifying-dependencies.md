@@ -40,14 +40,14 @@ Here are some more examples of caret requirements and the versions that would
 be allowed with them:
 
 ```notrust
-^1.2.3 := >=1.2.3 <2.0.0
-^1.2 := >=1.2.0 <2.0.0
-^1 := >=1.0.0 <2.0.0
-^0.2.3 := >=0.2.3 <0.3.0
-^0.2 := >= 0.2.0 < 0.3.0
-^0.0.3 := >=0.0.3 <0.0.4
-^0.0 := >=0.0.0 <0.1.0
-^0 := >=0.0.0 <1.0.0
+^1.2.3  :=  >=1.2.3 <2.0.0
+^1.2    :=  >=1.2.0 <2.0.0
+^1      :=  >=1.0.0 <2.0.0
+^0.2.3  :=  >=0.2.3 <0.3.0
+^0.2    :=  >=0.2.0 <0.3.0
+^0.0.3  :=  >=0.0.3 <0.0.4
+^0.0    :=  >=0.0.0 <0.1.0
+^0      :=  >=0.0.0 <1.0.0
 ```
 
 This compatibility convention is different from SemVer in the way it treats
@@ -65,9 +65,9 @@ version, then minor- and patch-level changes are allowed.
 `~1.2.3` is an example of a tilde requirement.
 
 ```notrust
-~1.2.3 := >=1.2.3 <1.3.0
-~1.2 := >=1.2.0 <1.3.0
-~1 := >=1.0.0 <2.0.0
+~1.2.3  := >=1.2.3 <1.3.0
+~1.2    := >=1.2.0 <1.3.0
+~1      := >=1.0.0 <2.0.0
 ```
 
 ### Wildcard requirements
@@ -78,17 +78,17 @@ positioned.
 `*`, `1.*` and `1.2.*` are examples of wildcard requirements.
 
 ```notrust
-* := >=0.0.0
-1.* := >=1.0.0 <2.0.0
+*     := >=0.0.0
+1.*   := >=1.0.0 <2.0.0
 1.2.* := >=1.2.0 <1.3.0
 ```
 
-### Inequality requirements
+### Comparison requirements
 
-**Inequality requirements** allow manually specifying a version range or an
+**Comparison requirements** allow manually specifying a version range or an
 exact version to depend on.
 
-Here are some examples of inequality requirements:
+Here are some examples of comparison requirements:
 
 ```notrust
 >= 1.2.0
@@ -440,7 +440,8 @@ Cargo how to find local unpublished crates.
 
 
 Platform-specific dependencies take the same format, but are listed under a
-`target` section. Normally Rust-like `#[cfg]` syntax will be used to define
+`target` section. Normally Rust-like [`#[cfg]`
+syntax](../reference/conditional-compilation.html) will be used to define
 these sections:
 
 ```toml
@@ -458,8 +459,18 @@ native = { path = "native/x86_64" }
 ```
 
 Like with Rust, the syntax here supports the `not`, `any`, and `all` operators
-to combine various cfg name/value pairs. Note that the `cfg` syntax has only
-been available since Cargo 0.9.0 (Rust 1.8.0).
+to combine various cfg name/value pairs.
+
+If you want to know which cfg targets are available on your platform, run
+`rustc --print=cfg` from the command line. If you want to know which `cfg`
+targets are available for another platform, such as 64-bit Windows,
+run `rustc --print=cfg --target=x86_64-pc-windows-msvc`.
+
+Unlike in your Rust source code,
+you cannot use `[target.'cfg(feature = "my_crate")'.dependencies]` to add
+dependencies based on optional crate features.
+Use [the `[features]` section](reference/manifest.html#the-features-section)
+instead.
 
 In addition to `#[cfg]` syntax, Cargo also supports listing out the full target
 the dependencies would apply to:

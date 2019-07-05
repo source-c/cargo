@@ -9,7 +9,7 @@ use git2::Config as GitConfig;
 use git2::Repository as GitRepository;
 
 use crate::core::{compiler, Workspace};
-use crate::util::errors::{CargoResult, CargoResultExt};
+use crate::util::errors::{self, CargoResult, CargoResultExt};
 use crate::util::{existing_vcs_repo, internal, FossilRepo, GitRepo, HgRepo, PijulRepo};
 use crate::util::{paths, validate_package_name, Config};
 
@@ -524,7 +524,7 @@ fn init_vcs(path: &Path, vcs: VersionControl, config: &Config) -> CargoResult<()
             }
         }
         VersionControl::Fossil => {
-            if path.join(".fossil").exists() {
+            if !path.join(".fossil").exists() {
                 FossilRepo::init(path, config.cwd())?;
             }
         }
@@ -567,7 +567,13 @@ fn mk(config: &Config, opts: &MkOptions<'_>) -> CargoResult<()> {
         (Some(name), Some(email), _, _)
         | (Some(name), None, _, Some(email))
         | (None, Some(email), name, _)
-        | (None, None, name, Some(email)) => format!("{} <{}>", name, email),
+        | (None, None, name, Some(email)) => {
+            if email.is_empty() {
+                name
+            } else {
+                format!("{} <{}>", name, email)
+            }
+        }
         (Some(name), None, _, None) | (None, None, name, None) => name,
     };
 
@@ -612,6 +618,8 @@ version = "0.1.0"
 authors = [{}]
 edition = {}
 {}
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
 [dependencies]
 {}"#,
             name,
@@ -671,7 +679,7 @@ mod tests {
         let msg = format!(
             "compiling this new crate may not work due to invalid \
              workspace configuration\n\n{}",
-            e
+            errors::display_causes(&e)
         );
         config.shell().warn(msg)?;
     }

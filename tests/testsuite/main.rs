@@ -2,8 +2,12 @@
 #![cfg_attr(feature = "deny-warnings", deny(warnings))]
 #![allow(clippy::blacklisted_name)]
 #![allow(clippy::explicit_iter_loop)]
+#![allow(clippy::redundant_closure)]
 #![warn(clippy::needless_borrow)]
 #![warn(clippy::redundant_clone)]
+
+#[macro_use]
+extern crate cargo_test_macro;
 
 #[macro_use]
 mod support;
@@ -18,6 +22,7 @@ mod build_lib;
 mod build_plan;
 mod build_script;
 mod build_script_env;
+mod cache_messages;
 mod cargo_alias_config;
 mod cargo_command;
 mod cargo_features;
@@ -44,6 +49,7 @@ mod generate_lockfile;
 mod git;
 mod init;
 mod install;
+mod install_upgrade;
 mod jobserver;
 mod list_targets;
 mod local_registry;
@@ -54,6 +60,7 @@ mod metabuild;
 mod metadata;
 mod net_config;
 mod new;
+mod offline;
 mod out_dir;
 mod overrides;
 mod package;
@@ -65,7 +72,9 @@ mod profile_config;
 mod profile_overrides;
 mod profile_targets;
 mod profiles;
+mod pub_priv;
 mod publish;
+mod publish_lockfile;
 mod read_manifest;
 mod registry;
 mod rename_deps;
@@ -83,12 +92,13 @@ mod small_fd_limits;
 mod test;
 mod tool_paths;
 mod update;
+mod vendor;
 mod verify_project;
 mod version;
 mod warn_on_failure;
 mod workspaces;
 
-#[test]
+#[cargo_test]
 fn aaa_trigger_cross_compile_disabled_check() {
     // This triggers the cross compile disabled check to run ASAP, see #5141
     support::cross_compile::disabled();
